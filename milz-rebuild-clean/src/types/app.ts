@@ -1,3 +1,4 @@
+
 export type AppTab = 'map' | 'ai' | 'favorite' | 'profile';
 export type UserRole = 'admin' | 'user';
 

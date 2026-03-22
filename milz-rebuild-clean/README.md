@@ -1,31 +1,32 @@
-# Milz Map X Experience - Phase 1
 
-New clean rebuild for the map × experience app.
+# milz-map-experience
 
-## Scope in this phase
-- Supabase Auth scaffold (Admin / User)
-- Spot CRUD UI scaffold
-- Map click registration flow scaffold
-- Favorites scaffold
-- Cloudflare R2 upload flow scaffold
-- Region master for Hawaii / New York / Tokyo / Kyoto / Osaka / Korea
+Clean rebuild for the Map × Experience app.
 
-## Environment variables
-See `.env.example`.
+## Stack
+- React + Vite + TypeScript
+- Leaflet
+- Supabase (Auth / Postgres)
+- Cloudflare Pages Functions
+- Cloudflare R2 for spot images
 
-## SQL
-Run `supabase/schema.sql` in the existing Supabase project.
+## Setup
+1. Copy `.env.example` to `.env.local` and fill the Supabase values.
+2. In Supabase SQL editor, run `supabase/schema.sql`.
+3. In Cloudflare Pages, bind the R2 bucket as `ASSETS` and add env vars:
+   - `SUPABASE_URL`
+   - `SUPABASE_SERVICE_ROLE_KEY`
+   - `GEMINI_API_KEY`
+   - `R2_PUBLIC_BASE_URL`
+4. If the app lives in a nested folder, set Cloudflare Pages Root directory accordingly.
 
-## Run
+## Local
 ```bash
 npm install
 npm run dev
 ```
 
-## Cloudflare Pages
-Set **Root directory** to the app folder if the repo root contains an extra wrapper folder.
-
-
-## Phase 2
-- Recommendation: geocode + nearby admin spots + Overpass/OSM
-- Trend: Google Suggest query phrases + deterministic reason text
+## Build
+```bash
+npm run build
+```

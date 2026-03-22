@@ -1,3 +1,4 @@
+
 create extension if not exists pgcrypto;
 
 create table if not exists profiles (
@@ -44,27 +45,55 @@ create table if not exists ai_cache (
   unique (cache_type, region_key)
 );
 
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into public.profiles (id, role, display_name)
+  values (
+    new.id,
+    coalesce((new.raw_user_meta_data ->> 'role')::text, 'user'),
+    coalesce((new.raw_user_meta_data ->> 'display_name')::text, new.email)
+  )
+  on conflict (id) do update set
+    role = excluded.role,
+    display_name = excluded.display_name;
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute procedure public.handle_new_user();
+
+create or replace function public.is_admin(uid uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (select 1 from public.profiles where id = uid and role = 'admin');
+$$;
+
 alter table profiles enable row level security;
 alter table spots enable row level security;
 alter table favorites enable row level security;
 alter table ai_cache enable row level security;
 
-create policy if not exists "profiles self read" on profiles for select using (auth.uid() = id);
-create policy if not exists "profiles self write" on profiles for all using (auth.uid() = id) with check (auth.uid() = id);
+create policy if not exists "profiles self read" on profiles for select to authenticated using (auth.uid() = id);
+create policy if not exists "profiles self update" on profiles for update to authenticated using (auth.uid() = id);
 
-create policy if not exists "spots public read" on spots for select using (true);
-create policy if not exists "spots admin write" on spots for insert with check (
-  exists(select 1 from profiles p where p.id = auth.uid() and p.role = 'admin')
-);
-create policy if not exists "spots admin update" on spots for update using (
-  exists(select 1 from profiles p where p.id = auth.uid() and p.role = 'admin')
-);
-create policy if not exists "spots admin delete" on spots for delete using (
-  exists(select 1 from profiles p where p.id = auth.uid() and p.role = 'admin')
-);
+create policy if not exists "spots read all" on spots for select to authenticated using (true);
+create policy if not exists "spots insert admin" on spots for insert to authenticated with check (public.is_admin(auth.uid()));
+create policy if not exists "spots update admin" on spots for update to authenticated using (public.is_admin(auth.uid()));
+create policy if not exists "spots delete admin" on spots for delete to authenticated using (public.is_admin(auth.uid()));
 
-create policy if not exists "favorites self read" on favorites for select using (auth.uid() = user_id);
-create policy if not exists "favorites self insert" on favorites for insert with check (auth.uid() = user_id);
-create policy if not exists "favorites self delete" on favorites for delete using (auth.uid() = user_id);
-
-create policy if not exists "ai cache read" on ai_cache for select using (true);
+create policy if not exists "favorites read own" on favorites for select to authenticated using (auth.uid() = user_id);
+create policy if not exists "favorites insert own" on favorites for insert to authenticated with check (auth.uid() = user_id);
+create policy if not exists "favorites update own" on favorites for update to authenticated using (auth.uid() = user_id);
+create policy if not exists "favorites delete own" on favorites for delete to authenticated using (auth.uid() = user_id);
