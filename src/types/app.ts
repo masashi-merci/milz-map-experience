@@ -19,7 +19,7 @@ export type RegionMaster = {
   areas: RegionArea[];
 };
 
-export type SpotCategory = 'sightseeing' | 'food' | 'cafe' | 'shopping' | 'landmark' | 'other';
+export type SpotCategory = 'sightseeing' | 'food' | 'other';
 
 export type Spot = {
   id: string;
@@ -28,12 +28,22 @@ export type Spot = {
   website?: string;
   imageUrl?: string;
   country: string;
-  state: string;
+  region: string;
   city: string;
   address?: string;
   lat: number;
   lng: number;
   category: SpotCategory;
+  createdAt: string;
+};
+
+export type FavoriteItem = {
+  id: string;
+  itemType: 'spot' | 'recommendation' | 'trend';
+  title: string;
+  subtitle?: string;
+  lat?: number;
+  lng?: number;
   createdAt: string;
 };
 
@@ -64,4 +74,25 @@ export type MapFocusPin = {
   description?: string;
   lat: number;
   lng: number;
+};
+
+export type AuthState = {
+  userId?: string;
+  email?: string;
+  role: UserRole;
+  displayName?: string;
+};
+
+export type SpotDraft = {
+  title: string;
+  description: string;
+  website: string;
+  imageFile?: File | null;
+  country: string;
+  region: string;
+  city: string;
+  address: string;
+  lat: number;
+  lng: number;
+  category: SpotCategory;
 };
