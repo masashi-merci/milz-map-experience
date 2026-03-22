@@ -1,19 +1,18 @@
-import type { RecommendationPayload, TrendItem } from '../types/app';
+import type { AIRecommendationItem, RecommendationPayload, TrendItem } from '../types/app';
 
 export function RecommendationList({
   data,
   onViewMap,
   onSave,
 }: {
-  data: RecommendationPayload | null;
-  onViewMap: (item: { title: string; description: string; lat: number; lng: number }) => void;
-  onSave: (item: unknown) => void;
+  data: RecommendationPayload;
+  onViewMap: (item: AIRecommendationItem) => void;
+  onSave: (item: AIRecommendationItem) => void;
 }) {
-  if (!data) return <div className="empty-box">Recommendation がここに表示されます。</div>;
-
-  const renderGroup = (title: string, items: RecommendationPayload['sightseeing']) => (
+  const renderGroup = (title: string, items: AIRecommendationItem[]) => (
     <section className="ai-group">
       <h3>{title}</h3>
+      {!items.length ? <div className="empty-box">まだ結果はありません。</div> : null}
       <div className="card-grid">
         {items.map((item, index) => (
           <article key={item.id} className="ai-card">
@@ -23,7 +22,7 @@ export function RecommendationList({
             <small>{item.address ?? '住所未設定'}</small>
             <div className="ai-card__actions">
               <button onClick={() => onViewMap(item)}>View on Map</button>
-              <button onClick={() => onSave({ type: 'recommendation', ...item })}>♡ Save</button>
+              <button onClick={() => onSave(item)}>♡ Save</button>
             </div>
           </article>
         ))}
@@ -39,15 +38,8 @@ export function RecommendationList({
   );
 }
 
-export function TrendList({
-  items,
-  onSave,
-}: {
-  items: TrendItem[];
-  onSave: (item: unknown) => void;
-}) {
+export function TrendList({ items, onSave }: { items: TrendItem[]; onSave: (item: TrendItem) => void }) {
   if (!items.length) return <div className="empty-box">Trend がここに表示されます。</div>;
-
   return (
     <div className="card-grid">
       {items.map((item, index) => (
@@ -56,10 +48,8 @@ export function TrendList({
           <h4>{item.keyword}</h4>
           <p>{item.reason}</p>
           <div className="ai-card__actions">
-            <button onClick={() => onSave({ type: 'trend', ...item })}>♡ Save</button>
-            {item.sourceUrl ? (
-              <a href={item.sourceUrl} target="_blank" rel="noreferrer">参照</a>
-            ) : null}
+            <button onClick={() => onSave(item)}>♡ Save</button>
+            {item.sourceUrl ? <a href={item.sourceUrl} target="_blank" rel="noreferrer">参照</a> : null}
           </div>
         </article>
       ))}

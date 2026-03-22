@@ -68,10 +68,10 @@ export const REGIONS: RegionMaster[] = [
     label: 'Korea',
     countryJa: '韓国',
     stateJa: 'ソウル',
-    center: [37.5665, 126.9780],
+    center: [37.5665, 126.978],
     areas: [
-      { id: 'jung-gu', labelJa: 'Jung-gu', lat: 37.5636, lng: 126.9970 },
-      { id: 'myeongdong', labelJa: '明洞', lat: 37.5636, lng: 126.9850 },
+      { id: 'jung-gu', labelJa: '中区', lat: 37.5636, lng: 126.997 },
+      { id: 'myeongdong', labelJa: '明洞', lat: 37.5636, lng: 126.985 },
       { id: 'hongdae', labelJa: '弘大', lat: 37.5563, lng: 126.9236 }
     ]
   }
