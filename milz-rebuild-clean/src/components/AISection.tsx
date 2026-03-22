@@ -1,13 +1,16 @@
+
 import type { AIRecommendationItem, RecommendationPayload, TrendItem } from '../types/app';
 
 export function RecommendationList({
   data,
   onViewMap,
   onSave,
+  isSaved,
 }: {
   data: RecommendationPayload;
   onViewMap: (item: AIRecommendationItem) => void;
   onSave: (item: AIRecommendationItem) => void;
+  isSaved: (id: string) => boolean;
 }) {
   const renderGroup = (title: string, items: AIRecommendationItem[]) => (
     <section className="ai-group">
@@ -22,7 +25,7 @@ export function RecommendationList({
             <small>{item.address ?? '住所未設定'}</small>
             <div className="ai-card__actions">
               <button onClick={() => onViewMap(item)}>View on Map</button>
-              <button onClick={() => onSave(item)}>♡ Save</button>
+              <button className={isSaved(item.id) ? 'is-saved' : ''} onClick={() => onSave(item)}>{isSaved(item.id) ? '♥ Saved' : '♡ Save'}</button>
             </div>
           </article>
         ))}
@@ -38,7 +41,15 @@ export function RecommendationList({
   );
 }
 
-export function TrendList({ items, onSave }: { items: TrendItem[]; onSave: (item: TrendItem) => void }) {
+export function TrendList({
+  items,
+  onSave,
+  isSaved,
+}: {
+  items: TrendItem[];
+  onSave: (item: TrendItem) => void;
+  isSaved: (id: string) => boolean;
+}) {
   if (!items.length) return <div className="empty-box">この地域の検索候補はまだ取得されていません。</div>;
   return (
     <div className="card-grid">
@@ -48,7 +59,7 @@ export function TrendList({ items, onSave }: { items: TrendItem[]; onSave: (item
           <h4>{item.keyword}</h4>
           <p>{item.reason}</p>
           <div className="ai-card__actions">
-            <button onClick={() => onSave(item)}>♡ Save</button>
+            <button className={isSaved(item.id) ? 'is-saved' : ''} onClick={() => onSave(item)}>{isSaved(item.id) ? '♥ Saved' : '♡ Save'}</button>
             {item.sourceUrl ? <a href={item.sourceUrl} target="_blank" rel="noreferrer">Googleで確認</a> : null}
           </div>
         </article>

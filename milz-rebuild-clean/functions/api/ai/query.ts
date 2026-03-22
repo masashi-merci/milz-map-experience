@@ -1,8 +1,9 @@
-import { createClient } from "@supabase/supabase-js";
-import { json } from "../../_shared/response";
+
+import { createClient } from '@supabase/supabase-js';
+import { json } from '../../_shared/response';
 
 type RequestBody = {
-  mode: "recommendation" | "trend";
+  mode: 'recommendation' | 'trend';
   regionKey: string;
   country: string;
   state: string;
@@ -10,12 +11,7 @@ type RequestBody = {
   landmark?: string;
 };
 
-type GeocodeResult = {
-  lat: number;
-  lng: number;
-  displayName: string;
-};
-
+type GeocodeResult = { lat: number; lng: number; displayName: string };
 type SuggestResponse = [string, string[]];
 
 type RecommendationItem = {
@@ -28,29 +24,24 @@ type RecommendationItem = {
   source: 'spot' | 'places';
 };
 
-type TrendItem = {
-  id: string;
-  keyword: string;
-  reason: string;
-  sourceUrl?: string;
-};
+type TrendItem = { id: string; keyword: string; reason: string; sourceUrl?: string };
 
 const RECOMMEND_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 const TREND_TTL_MS = 24 * 60 * 60 * 1000;
-const USER_AGENT = 'Milz Map X Experience/1.0';
+const USER_AGENT = 'Milz Map Experience/2.0';
 
 const supabaseUrl = (globalThis as any).process?.env?.SUPABASE_URL || (globalThis as any).SUPABASE_URL;
 const supabaseServiceRoleKey = (globalThis as any).process?.env?.SUPABASE_SERVICE_ROLE_KEY || (globalThis as any).SUPABASE_SERVICE_ROLE_KEY;
+const geminiApiKey = (globalThis as any).process?.env?.GEMINI_API_KEY || (globalThis as any).GEMINI_API_KEY;
 const supabase = supabaseUrl && supabaseServiceRoleKey ? createClient(supabaseUrl, supabaseServiceRoleKey) : null;
 
 export const onRequestPost: PagesFunction = async ({ request }) => {
   try {
     const body = (await request.json()) as RequestBody;
-    if (!body.country || !body.state || !body.cityArea) {
-      return json({ error: 'country / state / cityArea は必須です。' }, 400);
-    }
+    if (!body.country || !body.state || !body.cityArea) return json({ error: 'country / state / cityArea は必須です。' }, 400);
 
     const regionKey = buildRegionKey(body);
+
     if (body.mode === 'recommendation') {
       const cached = await readCache('recommendation', regionKey);
       if (cached) return json({ data: cached });
@@ -65,30 +56,19 @@ export const onRequestPost: PagesFunction = async ({ request }) => {
     await writeCache('trend', regionKey, data, TREND_TTL_MS);
     return json({ data });
   } catch (error) {
-    return json({ error: error instanceof Error ? error.message : 'AI query failed' }, 500);
+    return json({ error: error instanceof Error ? error.message : 'AI query failed.' }, 500);
   }
 };
 
 function buildRegionKey(body: RequestBody) {
-  return [body.country, body.state, body.cityArea, body.landmark || '']
-    .map(normalizeForKey)
-    .join('|');
-}
-
-function normalizeForKey(value: string) {
-  return value.trim().toLowerCase().replace(/\s+/g, ' ');
+  return [body.country, body.state, body.cityArea, body.landmark || ''].map(normalizeForKey).join('|');
 }
 
 async function readCache(cacheType: 'recommendation' | 'trend', regionKey: string) {
   if (!supabase) return null;
-  const { data } = await supabase
-    .from('ai_cache')
-    .select('payload_json, expires_at')
-    .eq('cache_type', cacheType)
-    .eq('region_key', regionKey)
-    .maybeSingle();
+  const { data } = await supabase.from('ai_cache').select('payload_json,expires_at').eq('cache_type', cacheType).eq('region_key', regionKey).maybeSingle();
   if (!data) return null;
-  if (new Date(data.expires_at).getTime() < Date.now()) return null;
+  if (new Date(data.expires_at).getTime() <= Date.now()) return null;
   return data.payload_json;
 }
 
@@ -106,10 +86,7 @@ async function buildRecommendations(body: RequestBody) {
   const geocode = await geocodeLocation(body);
   const sightseeing = await getNearbyRecommendations(body, geocode, 'sightseeing');
   const food = await getNearbyRecommendations(body, geocode, 'food');
-  return {
-    sightseeing: sightseeing.slice(0, 5),
-    food: food.slice(0, 5),
-  };
+  return { sightseeing: sightseeing.slice(0, 5), food: food.slice(0, 5) };
 }
 
 async function geocodeLocation(body: RequestBody): Promise<GeocodeResult> {
@@ -126,23 +103,21 @@ async function geocodeLocation(body: RequestBody): Promise<GeocodeResult> {
 async function getNearbyRecommendations(body: RequestBody, center: GeocodeResult, kind: 'sightseeing' | 'food'): Promise<RecommendationItem[]> {
   const admin = await getAdminSpots(body, center, kind);
   const osm = await getOsmPlaces(center, kind);
-  const merged = dedupeRecommendationItems([...admin, ...osm])
+  return dedupeRecommendationItems([...admin, ...osm])
     .map((item) => ({ ...item, distance: distanceKm(center.lat, center.lng, item.lat, item.lng) }))
     .filter((item) => item.distance <= maxDistanceKm(kind, body))
     .sort((a, b) => a.distance - b.distance)
     .slice(0, 5)
     .map(({ distance, ...item }) => item);
-  return merged;
 }
 
 function maxDistanceKm(kind: 'sightseeing' | 'food', body: RequestBody) {
-  const city = body.cityArea;
-  const wide = /(マンハッタン|ニューヨーク|ハワイ|ソウル|大阪市|京都市|東京|new york|manhattan|seoul|honolulu)/i.test(city);
-  if (kind === 'food') return wide ? 3.5 : 2.2;
-  return wide ? 5.5 : 3.2;
+  const wide = /(マンハッタン|ニューヨーク|ハワイ|ソウル|大阪市|京都市|東京|new york|manhattan|seoul|honolulu)/i.test(body.cityArea);
+  if (kind === 'food') return wide ? 3.6 : 2.3;
+  return wide ? 5.8 : 3.6;
 }
 
-async function getAdminSpots(body: RequestBody, center: GeocodeResult, kind: 'sightseeing' | 'food'): Promise<RecommendationItem[]> {
+async function getAdminSpots(body: RequestBody, _center: GeocodeResult, kind: 'sightseeing' | 'food'): Promise<RecommendationItem[]> {
   if (!supabase) return [];
   const categories = kind === 'food' ? ['food'] : ['sightseeing', 'other'];
   const { data } = await supabase
@@ -152,12 +127,12 @@ async function getAdminSpots(body: RequestBody, center: GeocodeResult, kind: 'si
     .eq('country', body.country)
     .eq('region', body.state)
     .ilike('city', `%${body.cityArea}%`)
-    .limit(30);
+    .limit(40);
   if (!data) return [];
   return data.map((row: any) => ({
     id: `spot:${row.id}`,
     title: row.title,
-    description: row.description || buildRecommendationDescription(row.title, row.address || `${row.city}`, kind, 0),
+    description: row.description || buildRecommendationDescription(row.title, row.address || `${row.city}`, kind, 0.4),
     address: row.address || `${row.city}, ${row.region}`,
     lat: Number(row.lat),
     lng: Number(row.lng),
@@ -178,32 +153,31 @@ async function getOsmPlaces(center: GeocodeResult, kind: 'sightseeing' | 'food')
   if (!res.ok) return [];
   const jsonRes = await res.json() as any;
   const elements = Array.isArray(jsonRes?.elements) ? jsonRes.elements : [];
-  return elements
-    .map((el: any) => {
-      const lat = typeof el.lat === 'number' ? el.lat : el.center?.lat;
-      const lng = typeof el.lon === 'number' ? el.lon : el.center?.lon;
-      const tags = el.tags || {};
-      const title = tags.name || tags['name:ja'] || tags['official_name'];
-      if (!title || typeof lat !== 'number' || typeof lng !== 'number') return null;
-      const addressParts = [tags['addr:city'], tags['addr:suburb'], tags['addr:street']].filter(Boolean);
-      return {
-        id: `osm:${el.type}:${el.id}`,
-        title,
-        description: buildRecommendationDescription(title, addressParts.join(' '), kind, distanceKm(center.lat, center.lng, lat, lng)),
-        address: addressParts.join(' ') || undefined,
-        lat,
-        lng,
-        source: 'places' as const,
-      };
-    })
-    .filter(Boolean) as RecommendationItem[];
+  return elements.map((el: any) => {
+    const lat = typeof el.lat === 'number' ? el.lat : el.center?.lat;
+    const lng = typeof el.lon === 'number' ? el.lon : el.center?.lon;
+    const tags = el.tags || {};
+    const title = tags['name:ja'] || tags.name || tags['official_name'];
+    if (!title || typeof lat !== 'number' || typeof lng !== 'number') return null;
+    const addressParts = [tags['addr:city'], tags['addr:suburb'], tags['addr:street']].filter(Boolean);
+    const address = addressParts.join(' ') || center.displayName;
+    return {
+      id: `osm:${el.type}:${el.id}`,
+      title,
+      description: buildRecommendationDescription(title, address, kind, distanceKm(center.lat, center.lng, lat, lng)),
+      address,
+      lat,
+      lng,
+      source: 'places' as const,
+    };
+  }).filter(Boolean) as RecommendationItem[];
 }
 
 function buildRecommendationDescription(title: string, address: string | undefined, kind: 'sightseeing' | 'food', distanceKmValue: number) {
   if (kind === 'food') {
-    return `${title}は${address || 'このエリア'}で立ち寄りやすい飲食候補です。中心地点から約${distanceKmValue.toFixed(1)}km圏で、食事や休憩の候補として使いやすいです。`;
+    return `${title}は${address || 'このエリア'}で立ち寄りやすい飲食候補です。中心地点から約${distanceKmValue.toFixed(1)}km圏にあり、食事や休憩先として動線に組み込みやすいです。`;
   }
-  return `${title}は${address || 'このエリア'}で立ち寄りやすい観光候補です。中心地点から約${distanceKmValue.toFixed(1)}km圏で、移動計画に組み込みやすいです。`;
+  return `${title}は${address || 'このエリア'}で立ち寄りやすい観光候補です。中心地点から約${distanceKmValue.toFixed(1)}km圏にあり、周辺散策と組み合わせやすいです。`;
 }
 
 function dedupeRecommendationItems(items: RecommendationItem[]) {
@@ -218,27 +192,37 @@ function dedupeRecommendationItems(items: RecommendationItem[]) {
 
 async function buildTrends(body: RequestBody): Promise<TrendItem[]> {
   const location = [body.cityArea, body.state, body.country].filter(Boolean).join(' ');
-  const suggestions = await getGoogleSuggestQueries(location);
+  const suggestions = await getGoogleSuggestQueries(location, body);
   const unique = dedupeStrings(suggestions)
     .filter((q) => includesLocation(q, body))
     .filter((q) => isUsefulTrendQuery(q, body))
     .slice(0, 10);
-  return unique.map((keyword, index) => ({
+
+  const enriched = await Promise.all(unique.map(async (keyword, index) => ({
     id: `trend:${index + 1}`,
     keyword,
-    reason: explainTrendKeyword(keyword, body),
+    reason: await explainTrendKeyword(keyword, body),
     sourceUrl: `https://www.google.com/search?q=${encodeURIComponent(keyword)}`,
-  }));
+  })));
+
+  return enriched;
 }
 
-async function getGoogleSuggestQueries(location: string): Promise<string[]> {
-  const variants = [
+async function getGoogleSuggestQueries(location: string, body: RequestBody): Promise<string[]> {
+  const seeds = [
     location,
-    `${location} `,
-    location.replace(/\s+/g, ' '),
-  ].filter(Boolean);
+    `${location} ランチ`,
+    `${location} カフェ`,
+    `${location} 観光`,
+    `${location} ホテル`,
+    `${location} イベント`,
+    `${location} アクセス`,
+    `${location} 天気`,
+    `${body.cityArea} グルメ`,
+    `${body.cityArea} おすすめ`,
+  ];
   const results: string[] = [];
-  for (const q of variants) {
+  for (const q of seeds) {
     const url = `https://suggestqueries.google.com/complete/search?client=firefox&hl=ja&q=${encodeURIComponent(q)}`;
     try {
       const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
@@ -246,9 +230,7 @@ async function getGoogleSuggestQueries(location: string): Promise<string[]> {
       const payload = await res.json() as SuggestResponse;
       const suggestions = Array.isArray(payload?.[1]) ? payload[1] : [];
       results.push(...suggestions);
-    } catch {
-      // ignore single-source failures
-    }
+    } catch {}
   }
   return results;
 }
@@ -264,60 +246,63 @@ function dedupeStrings(values: string[]) {
 }
 
 function includesLocation(query: string, body: RequestBody) {
-  const q = normalizeForKey(query);
-  return [body.cityArea, body.state, body.landmark || '']
-    .filter(Boolean)
-    .some((part) => q.includes(normalizeForKey(part)));
+  const normalized = normalizeForKey(query);
+  return [body.cityArea, body.state].some((part) => normalized.includes(normalizeForKey(part)));
 }
 
 function isUsefulTrendQuery(query: string, body: RequestBody) {
-  const q = query.trim();
-  if (q.length < 4) return false;
-  if (/^[\W_]+$/.test(q)) return false;
-  if (/�/.test(q)) return false;
-  if (/^[0-9\-\s]+$/.test(q)) return false;
-  const stripped = normalizeForKey(q)
-    .replace(normalizeForKey(body.cityArea), '')
-    .replace(normalizeForKey(body.state), '')
-    .replace(normalizeForKey(body.country), '')
-    .trim();
-  return stripped.length >= 2;
+  const normalized = normalizeForKey(query);
+  if (!normalized) return false;
+  if (/local trend|ローカルトレンド|google trends|ぐーぐるとれんず/.test(normalized)) return false;
+  if (/^[\W_]+$/.test(query)) return false;
+  if (normalized.length < normalizeForKey(body.cityArea).length + 2) return false;
+  return true;
 }
 
-function explainTrendKeyword(keyword: string, body: RequestBody) {
-  const loc = `${body.state}${body.cityArea}`;
-  const k = keyword.toLowerCase();
-  if (/ランチ|lunch|ディナー|居酒屋|グルメ|食べ歩き/.test(keyword)) {
-    return `${loc}では食事先を当日比較したい検索が増えやすく、営業時間・混雑・価格帯・予約可否を確認する目的でこの語が伸びています。`;
+async function explainTrendKeyword(keyword: string, body: RequestBody) {
+  const heuristic = heuristicTrendReason(keyword, body);
+  if (!geminiApiKey) return heuristic;
+  try {
+    const prompt = `あなたは検索意図の編集者です。以下の検索ワードが、なぜ今その地域で検索されているかを日本語で1-2文、具体的に推測してください。テンプレを使わず、イベント・季節・飲食・アクセス・観光・比較検討などの背景を入れてください。
+地域: ${body.cityArea} / ${body.state} / ${body.country}
+検索ワード: ${keyword}`;
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiApiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.4, maxOutputTokens: 120 } }),
+    });
+    if (!res.ok) return heuristic;
+    const jsonRes = await res.json() as any;
+    const text = jsonRes?.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join(' ').trim();
+    return text || heuristic;
+  } catch {
+    return heuristic;
   }
-  if (/カフェ|cafe|喫茶/.test(keyword)) {
-    return `${loc}では休憩・待ち合わせ・作業場所の需要が重なり、入りやすい店や雰囲気の良い店を探す検索としてこの語が人気になりやすいです。`;
-  }
-  if (/ホテル|宿|旅館/.test(keyword)) {
-    return `${loc}へ来訪する人が宿泊先を直前比較する時に検索しやすい語で、立地・価格・アクセス条件を確認する需要が背景にあります。`;
-  }
-  if (/天気|雨|気温/.test(keyword)) {
-    return `${loc}での外出計画や服装判断のために天候確認の検索が増えており、その場で予定を組み替えたい人の需要が背景です。`;
-  }
-  if (/アクセス|行き方|駅|駐車場/.test(keyword)) {
-    return `${loc}までの移動手段や現地での移動導線を確認したい時に検索されやすい語で、初訪問や混雑回避の需要が背景にあります。`;
-  }
-  if (/イベント|ライブ|祭り|展示|フェス/.test(keyword)) {
-    return `${loc}で開催中・開催予定の催しを確認する検索として伸びやすく、日程・会場・チケット・混雑を知りたい需要が背景にあります。`;
-  }
-  if (/桜|紅葉|花見|イルミネーション|夜景/.test(keyword)) {
-    return `${loc}の季節需要が高まる時期に、見頃や写真映え、混雑具合を確認したい人が増えるためこの語が検索されやすくなります。`;
-  }
-  if (/観光|見どころ|おすすめ|デート/.test(keyword)) {
-    return `${loc}をこれから回る人が、どこへ行くか・何を優先するかを決める段階で検索しやすい語で、回遊計画の需要が背景にあります。`;
-  }
-  return `${loc}でこのワードが検索されている背景には、現地で何が起きているか・何を優先して見るべきかを短時間で把握したい需要があると考えられます。`;
+}
+
+function heuristicTrendReason(keyword: string, body: RequestBody) {
+  const area = body.cityArea;
+  if (/ランチ|ディナー|グルメ|レストラン|居酒屋/.test(keyword)) return `${area}で食事先を比較したい検索が増えている語です。来店直前の店選びや、週末の外食先検討で検索されやすいです。`;
+  if (/カフェ|喫茶/.test(keyword)) return `${area}で休憩や作業向けの店を探す流れで検索されやすい語です。写真映えや営業時間の確認も重なりやすいです。`;
+  if (/ホテル|宿|旅館/.test(keyword)) return `${area}周辺で宿泊や滞在計画を立てる人が増えると伸びやすい語です。料金比較や立地確認の需要が重なります。`;
+  if (/アクセス|行き方|駅|駐車場/.test(keyword)) return `${area}へ向かう直前の移動確認で検索されやすい語です。電車・徒歩・車の導線確認が背景にあります。`;
+  if (/イベント|祭|フェス|展示|ライブ/.test(keyword)) return `${area}で期間限定の催しやイベントが意識される時に検索されやすい語です。開催日や会場情報を確認したい動きが背景にあります。`;
+  if (/桜|紅葉|花火|天気/.test(keyword)) return `${area}で季節の見頃や外出条件を確認したい時に検索が伸びやすい語です。天候と回遊計画を合わせて調べる需要があります。`;
+  return `${area}周辺で今よく調べられている語です。観光や飲食、移動計画の直前検索が重なって上がっている可能性があります。`;
+}
+
+function normalizeForKey(value: string) {
+  return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
 function distanceKm(lat1: number, lng1: number, lat2: number, lng2: number) {
-  const R = 6371;
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLng = ((lng2 - lng1) * Math.PI) / 180;
-  const a = Math.sin(dLat / 2) ** 2 + Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
-  return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const r = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * r * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function toRad(value: number) {
+  return (value * Math.PI) / 180;
 }
