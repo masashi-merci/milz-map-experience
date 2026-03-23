@@ -1,23 +1,34 @@
-
 import { Heart, Map, Sparkles, UserRound } from 'lucide-react';
-import type { AppTab } from '../types/app';
+import { t } from '../lib/i18n';
+import type { AppLanguage, AppTab } from '../types/app';
 
-const ITEMS: Array<{ key: AppTab; label: string; icon: typeof Map }> = [
-  { key: 'map', label: 'MAP', icon: Map },
-  { key: 'ai', label: 'AI', icon: Sparkles },
-  { key: 'favorite', label: 'FAVORITE', icon: Heart },
-  { key: 'profile', label: 'PROFILE', icon: UserRound },
-];
+const ICONS = {
+  map: Map,
+  ai: Sparkles,
+  favorite: Heart,
+  profile: UserRound,
+} as const;
 
-export function BottomNav({ value, onChange }: { value: AppTab; onChange: (next: AppTab) => void }) {
+export function BottomNav({ value, onChange, language }: { value: AppTab; onChange: (next: AppTab) => void; language: AppLanguage }) {
+  const labels = t(language);
+  const items: Array<{ key: AppTab; label: string }> = [
+    { key: 'map', label: labels.map },
+    { key: 'ai', label: labels.ai },
+    { key: 'favorite', label: labels.favorite },
+    { key: 'profile', label: labels.profile },
+  ];
+
   return (
     <nav className="bottom-nav">
-      {ITEMS.map(({ key, label, icon: Icon }) => (
-        <button key={key} className={value === key ? 'bottom-nav__item is-active' : 'bottom-nav__item'} onClick={() => onChange(key)}>
-          <Icon size={18} />
-          <span>{label}</span>
-        </button>
-      ))}
+      {items.map(({ key, label }) => {
+        const Icon = ICONS[key];
+        return (
+          <button key={key} className={value === key ? 'bottom-nav__item is-active' : 'bottom-nav__item'} onClick={() => onChange(key)}>
+            <Icon size={18} />
+            <span>{label}</span>
+          </button>
+        );
+      })}
     </nav>
   );
 }

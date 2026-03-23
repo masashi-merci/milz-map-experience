@@ -1,21 +1,25 @@
-
-import type { AIRecommendationItem, RecommendationPayload, TrendItem } from '../types/app';
+import { t } from '../lib/i18n';
+import type { AIRecommendationItem, AppLanguage, RecommendationPayload, TrendItem } from '../types/app';
 
 export function RecommendationList({
   data,
   onViewMap,
   onSave,
   isSaved,
+  language,
 }: {
   data: RecommendationPayload;
   onViewMap: (item: AIRecommendationItem) => void;
   onSave: (item: AIRecommendationItem) => void;
   isSaved: (id: string) => boolean;
+  language: AppLanguage;
 }) {
+  const labels = t(language);
+
   const renderGroup = (title: string, items: AIRecommendationItem[]) => (
     <section className="ai-group">
-      <div className="ai-group__header"><h3>{title}</h3><span>{items.length ? `${items.length}件` : '0件'}</span></div>
-      {!items.length ? <div className="empty-box">まだ結果はありません。</div> : null}
+      <div className="ai-group__header"><h3>{title}</h3><span>{items.length ? `${items.length}` : '0'}</span></div>
+      {!items.length ? <div className="empty-box">{labels.noResults}</div> : null}
       <div className="card-grid">
         {items.map((item, index) => (
           <article key={item.id} className="ai-card">
@@ -24,8 +28,8 @@ export function RecommendationList({
             <p>{item.description}</p>
             {item.address ? <small>{item.address}</small> : null}
             <div className="ai-card__actions">
-              <button onClick={() => onViewMap(item)}>View on Map</button>
-              <button className={isSaved(item.id) ? 'is-saved' : ''} onClick={() => onSave(item)}>{isSaved(item.id) ? '♥ Saved' : '♡ Save'}</button>
+              <button onClick={() => onViewMap(item)}>{labels.viewOnMap}</button>
+              <button className={isSaved(item.id) ? 'is-saved' : ''} onClick={() => onSave(item)}>{isSaved(item.id) ? `♥ ${labels.saved}` : `♡ ${labels.save}`}</button>
             </div>
           </article>
         ))}
@@ -35,8 +39,8 @@ export function RecommendationList({
 
   return (
     <div className="ai-section-content">
-      {renderGroup('観光地', data.sightseeing)}
-      {renderGroup('飲食店', data.food)}
+      {renderGroup(labels.sightseeing, data.sightseeing)}
+      {renderGroup(labels.food, data.food)}
     </div>
   );
 }
@@ -45,12 +49,15 @@ export function TrendList({
   items,
   onSave,
   isSaved,
+  language,
 }: {
   items: TrendItem[];
   onSave: (item: TrendItem) => void;
   isSaved: (id: string) => boolean;
+  language: AppLanguage;
 }) {
-  if (!items.length) return <div className="empty-box">まだ結果はありません。地域を選んで取得してください。</div>;
+  const labels = t(language);
+  if (!items.length) return <div className="empty-box">{labels.noResults}</div>;
   return (
     <div className="card-grid">
       {items.map((item, index) => (
@@ -59,8 +66,8 @@ export function TrendList({
           <h4>{item.keyword}</h4>
           <p>{item.reason}</p>
           <div className="ai-card__actions">
-            <button className={isSaved(item.id) ? 'is-saved' : ''} onClick={() => onSave(item)}>{isSaved(item.id) ? '♥ Saved' : '♡ Save'}</button>
-            {item.sourceUrl ? <a href={item.sourceUrl} target="_blank" rel="noreferrer">Googleで確認</a> : null}
+            <button className={isSaved(item.id) ? 'is-saved' : ''} onClick={() => onSave(item)}>{isSaved(item.id) ? `♥ ${labels.saved}` : `♡ ${labels.save}`}</button>
+            {item.sourceUrl ? <a href={item.sourceUrl} target="_blank" rel="noreferrer">Google</a> : null}
           </div>
         </article>
       ))}

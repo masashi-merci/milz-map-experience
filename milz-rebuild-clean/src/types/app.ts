@@ -1,21 +1,25 @@
-
 export type AppTab = 'map' | 'ai' | 'favorite' | 'profile';
 export type UserRole = 'admin' | 'user';
+export type AppLanguage = 'ja' | 'en';
 
 export type RegionKey = 'hawaii' | 'new-york' | 'tokyo' | 'kyoto' | 'osaka' | 'korea';
 
 export type RegionArea = {
   id: string;
   labelJa: string;
+  labelEn: string;
   lat: number;
   lng: number;
 };
 
 export type RegionMaster = {
   key: RegionKey;
+  labelJa: string;
+  labelEn: string;
   countryJa: string;
+  countryEn: string;
   stateJa: string;
-  label: string;
+  stateEn: string;
   center: [number, number];
   areas: RegionArea[];
 };

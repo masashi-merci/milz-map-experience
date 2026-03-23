@@ -1,8 +1,8 @@
-
 import { MapContainer, Marker, Popup, TileLayer, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
-import { useEffect, useMemo, useRef } from 'react';
-import type { MapFocusPin, Spot, UserRole } from '../types/app';
+import { useEffect, useRef } from 'react';
+import { t } from '../lib/i18n';
+import type { AppLanguage, MapFocusPin, Spot, UserRole } from '../types/app';
 
 const spotPin = new L.DivIcon({
   className: 'custom-pin',
@@ -18,20 +18,26 @@ const focusPin = new L.DivIcon({
   iconAnchor: [14, 14],
 });
 
-function SyncMapView({ focus, center }: { focus: MapFocusPin | null; center: [number, number] }) {
+function SyncMapView({ focus, center, tabActive }: { focus: MapFocusPin | null; center: [number, number]; tabActive: boolean }) {
   const map = useMap();
-  useEffect(() => {
-    const timer = window.setTimeout(() => map.invalidateSize(), 120);
-    return () => window.clearTimeout(timer);
-  }, [map, center, focus]);
 
   useEffect(() => {
-    if (focus) {
-      map.flyTo([focus.lat, focus.lng], 15, { duration: 1.1 });
-      return;
-    }
-    map.flyTo(center, 13, { duration: 0.9 });
-  }, [focus, center, map]);
+    const timer = window.setTimeout(() => map.invalidateSize(), 200);
+    return () => window.clearTimeout(timer);
+  }, [map, center, focus, tabActive]);
+
+  useEffect(() => {
+    if (!tabActive) return;
+    const timer = window.setTimeout(() => {
+      map.invalidateSize();
+      if (focus) {
+        map.flyTo([focus.lat, focus.lng], 15, { duration: 1.1 });
+      } else {
+        map.flyTo(center, 13, { duration: 0.9 });
+      }
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [focus, center, map, tabActive]);
 
   useEffect(() => {
     const onResize = () => map.invalidateSize();
@@ -80,6 +86,8 @@ export function MapPanel({
   onFavorite,
   onMapPick,
   isFavorite,
+  language,
+  tabActive,
 }: {
   center: [number, number];
   spots: Spot[];
@@ -88,14 +96,22 @@ export function MapPanel({
   onFavorite: (spot: Spot) => void;
   onMapPick: (lat: number, lng: number) => void;
   isFavorite: (spotId: string) => boolean;
+  language: AppLanguage;
+  tabActive: boolean;
 }) {
-  const mapKey = useMemo(() => `${center[0]}:${center[1]}`, [center]);
+  const labels = t(language);
 
   return (
     <div className="panel map-panel">
-      <MapContainer key={mapKey} center={center} zoom={13} scrollWheelZoom style={{ height: '100%', width: '100%' }}>
-        <TileLayer url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png" attribution="&copy; OpenStreetMap &copy; CARTO" />
-        <SyncMapView focus={focus} center={center} />
+      <MapContainer center={center} zoom={13} scrollWheelZoom style={{ height: '100%', width: '100%' }} preferCanvas={true}>
+        <TileLayer
+          url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+          attribution="&copy; OpenStreetMap &copy; CARTO"
+          maxZoom={20}
+          subdomains={["a", "b", "c", "d"]}
+          updateWhenIdle={true}
+        />
+        <SyncMapView focus={focus} center={center} tabActive={tabActive} />
         <PickSpot enabled={authRole === 'admin'} onPick={onMapPick} />
         {spots.map((spot) => (
           <Marker key={spot.id} position={[spot.lat, spot.lng]} icon={spotPin}>
@@ -106,7 +122,7 @@ export function MapPanel({
                 <p>{spot.description}</p>
                 {spot.website ? <a href={spot.website} target="_blank" rel="noreferrer">Website</a> : null}
                 <button className={isFavorite(spot.id) ? 'heart-button is-saved' : 'heart-button'} onClick={() => onFavorite(spot)}>
-                  {isFavorite(spot.id) ? '♥ お気に入り済み' : '♡ お気に入り'}
+                  {isFavorite(spot.id) ? `♥ ${labels.saved}` : `♡ ${labels.save}`}
                 </button>
               </div>
             </Popup>
