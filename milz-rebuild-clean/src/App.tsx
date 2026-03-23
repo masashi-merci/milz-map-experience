@@ -110,14 +110,17 @@ export default function App() {
 
     await loadFavorites(user.id);
 
-    supabase.auth.onAuthStateChange(async (_event, session) => {
+    const client = supabase;
+    if (!client) return;
+
+    client.auth.onAuthStateChange(async (_event, session) => {
       if (!session?.user) {
         setAuth({ role: 'user', displayName: 'Guest' });
         setFavorites([]);
         return;
       }
       const nextUser = session.user;
-      const { data: nextProfile } = await supabase
+      const { data: nextProfile } = await client
         .from('profiles')
         .select('role,display_name')
         .eq('id', nextUser.id)
