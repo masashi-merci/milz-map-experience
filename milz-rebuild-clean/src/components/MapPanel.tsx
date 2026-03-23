@@ -18,12 +18,27 @@ const focusPin = new L.DivIcon({
   iconAnchor: [14, 14],
 });
 
-function FlyToFocus({ focus }: { focus: MapFocusPin | null }) {
+function SyncMapView({ focus, center }: { focus: MapFocusPin | null; center: [number, number] }) {
   const map = useMap();
   useEffect(() => {
-    if (!focus) return;
-    map.flyTo([focus.lat, focus.lng], 15, { duration: 1.1 });
-  }, [focus, map]);
+    const timer = window.setTimeout(() => map.invalidateSize(), 120);
+    return () => window.clearTimeout(timer);
+  }, [map, center, focus]);
+
+  useEffect(() => {
+    if (focus) {
+      map.flyTo([focus.lat, focus.lng], 15, { duration: 1.1 });
+      return;
+    }
+    map.flyTo(center, 13, { duration: 0.9 });
+  }, [focus, center, map]);
+
+  useEffect(() => {
+    const onResize = () => map.invalidateSize();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [map]);
+
   return null;
 }
 
@@ -80,7 +95,7 @@ export function MapPanel({
     <div className="panel map-panel">
       <MapContainer key={mapKey} center={center} zoom={13} scrollWheelZoom style={{ height: '100%', width: '100%' }}>
         <TileLayer url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png" attribution="&copy; OpenStreetMap &copy; CARTO" />
-        <FlyToFocus focus={focus} />
+        <SyncMapView focus={focus} center={center} />
         <PickSpot enabled={authRole === 'admin'} onPick={onMapPick} />
         {spots.map((spot) => (
           <Marker key={spot.id} position={[spot.lat, spot.lng]} icon={spotPin}>

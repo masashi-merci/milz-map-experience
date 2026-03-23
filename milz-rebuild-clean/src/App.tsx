@@ -391,12 +391,6 @@ export default function App() {
       </header>
 
       <main className="main-grid">
-        <section className="hero-card">
-          <p className="eyebrow">MAP × EXPERIENCE</p>
-          <h1>スタイリッシュな地図と、AI の Recommendation / Trend をひとつにまとめた clean rebuild。</h1>
-          <p>Supabase で認証とデータ、Cloudflare R2 で画像、Pages Functions で AI / upload を動かします。</p>
-        </section>
-
         <section className="filters-card">
           <div className="filters-card__title">地域選択</div>
           <div className="segmented">
@@ -440,11 +434,16 @@ export default function App() {
               <button className={activeAiTab === 'recommend' ? 'segmented__item is-active' : 'segmented__item'} onClick={() => setActiveAiTab('recommend')}>RECOMMENDATION</button>
               <button className={activeAiTab === 'trend' ? 'segmented__item is-active' : 'segmented__item'} onClick={() => setActiveAiTab('trend')}>TREND</button>
             </div>
-            <div className="action-row">
-              <button className="primary-button" onClick={fetchRecommendation} disabled={loading === 'recommend'}>{loading === 'recommend' ? 'Recommendation 取得中...' : 'Recommendation を取得'}</button>
-              <button className="secondary-button" onClick={fetchTrends} disabled={loading === 'trend'}>{loading === 'trend' ? 'Trend 取得中...' : 'Trend を取得'}</button>
+            <div className="action-row action-row--single">
+              <div className="ai-panel__hint">{activeAiTab === 'recommend' ? '観光地 5件と飲食店 5件を表示します。' : '該当地域の検索ワード上位 10件を表示します。'}</div>
+            {activeAiTab === 'recommend' ? (
+                <button className="primary-button primary-button--wide" onClick={fetchRecommendation} disabled={loading === 'recommend'}>{loading === 'recommend' ? 'おすすめを取得中…' : 'おすすめを取得'}</button>
+              ) : (
+                <button className="primary-button primary-button--wide" onClick={fetchTrends} disabled={loading === 'trend'}>{loading === 'trend' ? 'トレンドを取得中…' : 'トレンドを取得'}</button>
+              )}
             </div>
             {error ? <div className="error-box">{error}</div> : null}
+            <div className="ai-panel__hint">{activeAiTab === 'recommend' ? '観光地 5件と飲食店 5件を表示します。' : '該当地域の検索ワード上位 10件を表示します。'}</div>
             {activeAiTab === 'recommend' ? (
               <RecommendationList
                 data={recommendation}

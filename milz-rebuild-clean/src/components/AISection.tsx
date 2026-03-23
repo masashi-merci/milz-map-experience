@@ -14,7 +14,7 @@ export function RecommendationList({
 }) {
   const renderGroup = (title: string, items: AIRecommendationItem[]) => (
     <section className="ai-group">
-      <h3>{title}</h3>
+      <div className="ai-group__header"><h3>{title}</h3><span>{items.length ? `${items.length}件` : '0件'}</span></div>
       {!items.length ? <div className="empty-box">まだ結果はありません。</div> : null}
       <div className="card-grid">
         {items.map((item, index) => (
@@ -22,7 +22,7 @@ export function RecommendationList({
             <div className="ai-card__eyebrow">{title} {index + 1}</div>
             <h4>{item.title}</h4>
             <p>{item.description}</p>
-            <small>{item.address ?? '住所未設定'}</small>
+            {item.address ? <small>{item.address}</small> : null}
             <div className="ai-card__actions">
               <button onClick={() => onViewMap(item)}>View on Map</button>
               <button className={isSaved(item.id) ? 'is-saved' : ''} onClick={() => onSave(item)}>{isSaved(item.id) ? '♥ Saved' : '♡ Save'}</button>
@@ -50,12 +50,12 @@ export function TrendList({
   onSave: (item: TrendItem) => void;
   isSaved: (id: string) => boolean;
 }) {
-  if (!items.length) return <div className="empty-box">この地域の検索候補はまだ取得されていません。</div>;
+  if (!items.length) return <div className="empty-box">まだ結果はありません。地域を選んで取得してください。</div>;
   return (
     <div className="card-grid">
       {items.map((item, index) => (
         <article key={item.id} className="ai-card">
-          <div className="ai-card__eyebrow">Trend {index + 1}</div>
+          <div className="ai-card__eyebrow">#{index + 1}</div>
           <h4>{item.keyword}</h4>
           <p>{item.reason}</p>
           <div className="ai-card__actions">
