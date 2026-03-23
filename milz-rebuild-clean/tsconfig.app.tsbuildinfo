@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/main.tsx","./src/vite-env.d.ts","./src/components/AISection.tsx","./src/components/BottomNav.tsx","./src/components/MapPanel.tsx","./src/lib/i18n.ts","./src/lib/regions.ts","./src/lib/supabase.ts","./src/types/app.ts"],"version":"5.9.3"}

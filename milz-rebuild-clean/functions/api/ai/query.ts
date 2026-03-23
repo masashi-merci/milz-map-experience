@@ -1,14 +1,13 @@
-
 import { createClient } from '@supabase/supabase-js';
 import { json } from '../../_shared/response';
 
 type RequestBody = {
   mode: 'recommendation' | 'trend';
-  regionKey: string;
   country: string;
   state: string;
   cityArea: string;
   landmark?: string;
+  lang?: 'ja' | 'en';
 };
 
 type GeocodeResult = { lat: number; lng: number; displayName: string };
@@ -22,18 +21,38 @@ type RecommendationItem = {
   lat: number;
   lng: number;
   source: 'spot' | 'places';
+  score?: number;
+  distanceKm?: number;
+  rawType?: string;
 };
 
 type TrendItem = { id: string; keyword: string; reason: string; sourceUrl?: string };
 
+type CacheType = 'recommendation' | 'trend';
+
 const RECOMMEND_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 const TREND_TTL_MS = 24 * 60 * 60 * 1000;
-const USER_AGENT = 'Milz Map Experience/2.0';
+const USER_AGENT = 'Milz Map Experience/3.0';
 
 const supabaseUrl = (globalThis as any).process?.env?.SUPABASE_URL || (globalThis as any).SUPABASE_URL;
 const supabaseServiceRoleKey = (globalThis as any).process?.env?.SUPABASE_SERVICE_ROLE_KEY || (globalThis as any).SUPABASE_SERVICE_ROLE_KEY;
 const geminiApiKey = (globalThis as any).process?.env?.GEMINI_API_KEY || (globalThis as any).GEMINI_API_KEY;
 const supabase = supabaseUrl && supabaseServiceRoleKey ? createClient(supabaseUrl, supabaseServiceRoleKey) : null;
+
+const CHAIN_BLACKLIST = [
+  /mcdonald/i, /macdonald/i, /マクドナルド/, /starbucks/i, /スターバックス/, /burger king/i, /ケンタッキー/,
+  /kfc/i, /subway/i, /ドトール/, /tully'?s/i, /タリーズ/, /サイゼリヤ/, /くら寿司/, /はま寿司/, /すき家/,
+  /吉野家/, /松屋/, /coco壱/i, /coco ichibanya/i, /丸亀製麺/, /なか卯/, /mos burger/i, /モスバーガー/,
+  /saizeriya/i, /pronto/i, /コメダ/, /komeda/i, /blue bottle/i, /shake shack/i,
+];
+
+const SIGHTSEEING_BLOCKLIST = [
+  /church/i, /chapel/i, /cathedral/i, /mosque/i, /synagogue/i, /temple/i, /shrine/i, /religious/i,
+  /教会/, /協会/, /寺/, /神社/, /礼拝堂/, /宗教/, /モスク/, /大聖堂/, /カテドラル/,
+  /association/i, /society/i, /federation/i, /committee/i, /office/i, /bureau/i, /ministry/i,
+  /clinic/i, /hospital/i, /school/i, /college/i, /university/i, /embassy/i,
+  /病院/, /学校/, /大学/, /事務所/, /役所/, /庁舎/, /会館/, /センター$/,
+];
 
 export const onRequestPost: PagesFunction = async ({ request }) => {
   try {
@@ -41,17 +60,16 @@ export const onRequestPost: PagesFunction = async ({ request }) => {
     if (!body.country || !body.state || !body.cityArea) return json({ error: 'country / state / cityArea は必須です。' }, 400);
 
     const regionKey = buildRegionKey(body);
+    const cacheType: CacheType = body.mode === 'recommendation' ? 'recommendation' : 'trend';
+    const cached = await readCache(cacheType, regionKey);
+    if (cached) return json({ data: cached });
 
     if (body.mode === 'recommendation') {
-      const cached = await readCache('recommendation', regionKey);
-      if (cached) return json({ data: cached });
       const data = await buildRecommendations(body);
       await writeCache('recommendation', regionKey, data, RECOMMEND_TTL_MS);
       return json({ data });
     }
 
-    const cached = await readCache('trend', regionKey);
-    if (cached) return json({ data: cached });
     const data = await buildTrends(body);
     await writeCache('trend', regionKey, data, TREND_TTL_MS);
     return json({ data });
@@ -61,10 +79,10 @@ export const onRequestPost: PagesFunction = async ({ request }) => {
 };
 
 function buildRegionKey(body: RequestBody) {
-  return [body.country, body.state, body.cityArea, body.landmark || ''].map(normalizeForKey).join('|');
+  return [body.lang || 'ja', body.country, body.state, body.cityArea, body.landmark || ''].map(normalizeKey).join('|');
 }
 
-async function readCache(cacheType: 'recommendation' | 'trend', regionKey: string) {
+async function readCache(cacheType: CacheType, regionKey: string) {
   if (!supabase) return null;
   const { data } = await supabase.from('ai_cache').select('payload_json,expires_at').eq('cache_type', cacheType).eq('region_key', regionKey).maybeSingle();
   if (!data) return null;
@@ -72,7 +90,7 @@ async function readCache(cacheType: 'recommendation' | 'trend', regionKey: strin
   return data.payload_json;
 }
 
-async function writeCache(cacheType: 'recommendation' | 'trend', regionKey: string, payload: unknown, ttlMs: number) {
+async function writeCache(cacheType: CacheType, regionKey: string, payload: unknown, ttlMs: number) {
   if (!supabase) return;
   await supabase.from('ai_cache').upsert({
     cache_type: cacheType,
@@ -84,67 +102,74 @@ async function writeCache(cacheType: 'recommendation' | 'trend', regionKey: stri
 
 async function buildRecommendations(body: RequestBody) {
   const geocode = await geocodeLocation(body);
-  const sightseeing = await getNearbyRecommendations(body, geocode, 'sightseeing');
-  const food = await getNearbyRecommendations(body, geocode, 'food');
-  return { sightseeing: sightseeing.slice(0, 5), food: food.slice(0, 5) };
+  const admin = await getAdminSpots(geocode, body);
+  const sightseeingRaw = await getOsmPlaces(geocode, body, 'sightseeing');
+  const foodRaw = await getOsmPlaces(geocode, body, 'food');
+
+  const sightseeing = rankRecommendations([...admin.sightseeing, ...sightseeingRaw], geocode, body, 'sightseeing').slice(0, 5);
+  const food = rankRecommendations([...admin.food, ...foodRaw], geocode, body, 'food').slice(0, 5);
+
+  return {
+    sightseeing: await enrichRecommendationDescriptions(sightseeing, body, 'sightseeing'),
+    food: await enrichRecommendationDescriptions(food, body, 'food'),
+  };
 }
 
 async function geocodeLocation(body: RequestBody): Promise<GeocodeResult> {
   const q = [body.landmark, body.cityArea, body.state, body.country].filter(Boolean).join(' ');
-  const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&addressdetails=1&accept-language=ja&q=${encodeURIComponent(q)}`;
+  const lang = body.lang === 'en' ? 'en' : 'ja';
+  const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&addressdetails=1&accept-language=${lang}&q=${encodeURIComponent(q)}`;
   const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
   if (!res.ok) throw new Error('Geocode failed');
   const rows = await res.json() as any[];
-  if (!Array.isArray(rows) || rows.length === 0) throw new Error('指定地域を geocode できませんでした。');
+  if (!Array.isArray(rows) || rows.length === 0) throw new Error(body.lang === 'en' ? 'Unable to locate that area.' : '指定地域を geocode できませんでした。');
   const row = rows[0];
   return { lat: Number(row.lat), lng: Number(row.lon), displayName: row.display_name || q };
 }
 
-async function getNearbyRecommendations(body: RequestBody, center: GeocodeResult, kind: 'sightseeing' | 'food'): Promise<RecommendationItem[]> {
-  const admin = await getAdminSpots(body, center, kind);
-  const osm = await getOsmPlaces(center, kind);
-  return dedupeRecommendationItems([...admin, ...osm])
-    .map((item) => ({ ...item, distance: distanceKm(center.lat, center.lng, item.lat, item.lng) }))
-    .filter((item) => item.distance <= maxDistanceKm(kind, body))
-    .sort((a, b) => a.distance - b.distance)
-    .slice(0, 5)
-    .map(({ distance, ...item }) => item);
-}
-
-function maxDistanceKm(kind: 'sightseeing' | 'food', body: RequestBody) {
-  const wide = /(マンハッタン|ニューヨーク|ハワイ|ソウル|大阪市|京都市|東京|new york|manhattan|seoul|honolulu)/i.test(body.cityArea);
-  if (kind === 'food') return wide ? 3.6 : 2.3;
-  return wide ? 5.8 : 3.6;
-}
-
-async function getAdminSpots(body: RequestBody, _center: GeocodeResult, kind: 'sightseeing' | 'food'): Promise<RecommendationItem[]> {
-  if (!supabase) return [];
-  const categories = kind === 'food' ? ['food'] : ['sightseeing', 'other'];
+async function getAdminSpots(center: GeocodeResult, body: RequestBody) {
+  if (!supabase) return { sightseeing: [] as RecommendationItem[], food: [] as RecommendationItem[] };
   const { data } = await supabase
     .from('spots')
     .select('id,title,description,address,lat,lng,category,city,region,country')
-    .in('category', categories)
-    .eq('country', body.country)
-    .eq('region', body.state)
-    .ilike('city', `%${body.cityArea}%`)
-    .limit(40);
-  if (!data) return [];
-  return data.map((row: any) => ({
+    .limit(300);
+  if (!data) return { sightseeing: [], food: [] };
+  const mapped = data.map((row: any) => ({
     id: `spot:${row.id}`,
     title: row.title,
-    description: row.description || buildRecommendationDescription(row.title, row.address || `${row.city}`, kind, 0.4),
-    address: row.address || `${row.city}, ${row.region}`,
+    description: row.description || '',
+    address: row.address || [row.city, row.region].filter(Boolean).join(', '),
     lat: Number(row.lat),
     lng: Number(row.lng),
     source: 'spot' as const,
+    rawType: row.category,
+    distanceKm: distanceKm(center.lat, center.lng, Number(row.lat), Number(row.lng)),
   }));
+  return {
+    sightseeing: mapped.filter((item) => (item.rawType === 'sightseeing' || item.rawType === 'other') && passesSightseeingFilter(item.title, item.address || '')),
+    food: mapped.filter((item) => item.rawType === 'food' && passesFoodFilter(item.title, item.address || '')),
+  };
 }
 
-async function getOsmPlaces(center: GeocodeResult, kind: 'sightseeing' | 'food'): Promise<RecommendationItem[]> {
-  const radius = kind === 'food' ? 3200 : 5200;
+async function getOsmPlaces(center: GeocodeResult, body: RequestBody, kind: 'sightseeing' | 'food'): Promise<RecommendationItem[]> {
+  const radius = kind === 'food' ? 4500 : 8000;
   const query = kind === 'food'
-    ? `[out:json][timeout:20];(node(around:${radius},${center.lat},${center.lng})[amenity~"restaurant|cafe|fast_food|bar|pub|food_court"];way(around:${radius},${center.lat},${center.lng})[amenity~"restaurant|cafe|fast_food|bar|pub|food_court"];relation(around:${radius},${center.lat},${center.lng})[amenity~"restaurant|cafe|fast_food|bar|pub|food_court"];);out center tags 80;`
-    : `[out:json][timeout:20];(node(around:${radius},${center.lat},${center.lng})[tourism~"attraction|museum|gallery|viewpoint|artwork|zoo"];way(around:${radius},${center.lat},${center.lng})[tourism~"attraction|museum|gallery|viewpoint|artwork|zoo"];relation(around:${radius},${center.lat},${center.lng})[tourism~"attraction|museum|gallery|viewpoint|artwork|zoo"];node(around:${radius},${center.lat},${center.lng})[leisure="park"];way(around:${radius},${center.lat},${center.lng})[leisure="park"];node(around:${radius},${center.lat},${center.lng})[historic];way(around:${radius},${center.lat},${center.lng})[historic];node(around:${radius},${center.lat},${center.lng})[amenity~"place_of_worship|arts_centre"];way(around:${radius},${center.lat},${center.lng})[amenity~"place_of_worship|arts_centre"];);out center tags 120;`;
+    ? `[out:json][timeout:20];(
+        node(around:${radius},${center.lat},${center.lng})[amenity~"restaurant|cafe|ice_cream|biergarten|food_court"];
+        way(around:${radius},${center.lat},${center.lng})[amenity~"restaurant|cafe|ice_cream|biergarten|food_court"];
+        relation(around:${radius},${center.lat},${center.lng})[amenity~"restaurant|cafe|ice_cream|biergarten|food_court"];
+      );out center tags 120;`
+    : `[out:json][timeout:20];(
+        node(around:${radius},${center.lat},${center.lng})[tourism~"attraction|museum|gallery|viewpoint|theme_park|zoo|aquarium|artwork"];
+        way(around:${radius},${center.lat},${center.lng})[tourism~"attraction|museum|gallery|viewpoint|theme_park|zoo|aquarium|artwork"];
+        relation(around:${radius},${center.lat},${center.lng})[tourism~"attraction|museum|gallery|viewpoint|theme_park|zoo|aquarium|artwork"];
+        node(around:${radius},${center.lat},${center.lng})[leisure~"park|garden|nature_reserve"];
+        way(around:${radius},${center.lat},${center.lng})[leisure~"park|garden|nature_reserve"];
+        relation(around:${radius},${center.lat},${center.lng})[leisure~"park|garden|nature_reserve"];
+        node(around:${radius},${center.lat},${center.lng})[historic~"monument|castle|ruins|memorial|fort|archaeological_site"];
+        way(around:${radius},${center.lat},${center.lng})[historic~"monument|castle|ruins|memorial|fort|archaeological_site"];
+        relation(around:${radius},${center.lat},${center.lng})[historic~"monument|castle|ruins|memorial|fort|archaeological_site"];
+      );out center tags 160;`;
   const res = await fetch('https://overpass-api.de/api/interpreter', {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=UTF-8', 'User-Agent': USER_AGENT },
@@ -153,92 +178,277 @@ async function getOsmPlaces(center: GeocodeResult, kind: 'sightseeing' | 'food')
   if (!res.ok) return [];
   const jsonRes = await res.json() as any;
   const elements = Array.isArray(jsonRes?.elements) ? jsonRes.elements : [];
-  return elements.map((el: any) => {
+  const items: RecommendationItem[] = [];
+  for (const el of elements) {
     const lat = typeof el.lat === 'number' ? el.lat : el.center?.lat;
     const lng = typeof el.lon === 'number' ? el.lon : el.center?.lon;
     const tags = el.tags || {};
-    const title = tags['name:ja'] || tags.name || tags['official_name'];
-    if (!title || typeof lat !== 'number' || typeof lng !== 'number') return null;
-    const addressParts = [tags['addr:city'], tags['addr:suburb'], tags['addr:street']].filter(Boolean);
-    const address = addressParts.join(' ') || center.displayName;
-    return {
+    const title = tags['name:ja'] || tags['name:en'] || tags.name || tags['official_name'];
+    if (!title || typeof lat !== 'number' || typeof lng !== 'number') continue;
+    const address = [tags['addr:city'], tags['addr:suburb'], tags['addr:street']].filter(Boolean).join(' ') || body.cityArea;
+    const item: RecommendationItem = {
       id: `osm:${el.type}:${el.id}`,
       title,
-      description: buildRecommendationDescription(title, address, kind, distanceKm(center.lat, center.lng, lat, lng)),
+      description: '',
       address,
       lat,
       lng,
-      source: 'places' as const,
+      source: 'places',
+      rawType: tags.tourism || tags.amenity || tags.leisure || tags.historic || '',
+      distanceKm: distanceKm(center.lat, center.lng, lat, lng),
     };
-  }).filter(Boolean) as RecommendationItem[];
+    if (kind === 'food' ? passesFoodFilter(title, address) : passesSightseeingFilter(title, address, tags)) {
+      items.push(item);
+    }
+  }
+  return items;
 }
 
-function buildRecommendationDescription(title: string, address: string | undefined, kind: 'sightseeing' | 'food', distanceKmValue: number) {
-  if (kind === 'food') {
-    return `${title}は${address || 'このエリア'}で立ち寄りやすい飲食候補です。中心地点から約${distanceKmValue.toFixed(1)}km圏にあり、食事や休憩先として動線に組み込みやすいです。`;
-  }
-  return `${title}は${address || 'このエリア'}で立ち寄りやすい観光候補です。中心地点から約${distanceKmValue.toFixed(1)}km圏にあり、周辺散策と組み合わせやすいです。`;
+function passesSightseeingFilter(title: string, address: string, tags: Record<string, string> = {}) {
+  const hay = `${title} ${address} ${Object.values(tags).join(' ')}`;
+  if (SIGHTSEEING_BLOCKLIST.some((pattern) => pattern.test(hay))) return false;
+  if (/place_of_worship|religion|church|shrine|temple|mosque|synagogue/i.test(JSON.stringify(tags))) return false;
+  return title.trim().length >= 2;
+}
+
+function passesFoodFilter(title: string, address: string) {
+  const hay = `${title} ${address}`;
+  if (CHAIN_BLACKLIST.some((pattern) => pattern.test(hay))) return false;
+  if (/school|hospital|office|church|temple|shrine|協会|教会|寺|神社/.test(hay)) return false;
+  return title.trim().length >= 2;
+}
+
+function rankRecommendations(items: RecommendationItem[], center: GeocodeResult, body: RequestBody, kind: 'sightseeing' | 'food') {
+  const areaTokens = [body.cityArea, body.state, body.landmark || ''].filter(Boolean).map(normalizeKey);
+  return dedupeRecommendationItems(items)
+    .map((item) => {
+      const distance = item.distanceKm ?? distanceKm(center.lat, center.lng, item.lat, item.lng);
+      const text = normalizeKey(`${item.title} ${item.address || ''}`);
+      let score = item.source === 'spot' ? 100 : 0;
+      score += Math.max(0, 40 - distance * (kind === 'food' ? 12 : 8));
+      if (item.rawType) {
+        if (kind === 'sightseeing' && /museum|gallery|viewpoint|attraction|monument|castle|park|garden|theme_park|zoo|aquarium|ruins/.test(item.rawType)) score += 12;
+        if (kind === 'food' && /restaurant|cafe|ice_cream|biergarten/.test(item.rawType)) score += 10;
+      }
+      if (areaTokens.some((token) => token && text.includes(token))) score += 20;
+      if (item.title.length > 2 && item.title.length < 35) score += 4;
+      return { ...item, distanceKm: distance, score };
+    })
+    .filter((item) => item.distanceKm! <= (kind === 'food' ? 4.5 : 8))
+    .sort((a, b) => (b.score! - a.score!) || (a.distanceKm! - b.distanceKm!));
 }
 
 function dedupeRecommendationItems(items: RecommendationItem[]) {
   const seen = new Set<string>();
   return items.filter((item) => {
-    const key = normalizeForKey(`${item.title}|${item.address || ''}`);
+    const key = normalizeKey(`${item.title}|${Math.round(item.lat * 1000)}|${Math.round(item.lng * 1000)}`);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
 }
 
+async function enrichRecommendationDescriptions(items: RecommendationItem[], body: RequestBody, kind: 'sightseeing' | 'food') {
+  if (!items.length) return [];
+  const fallback = items.map((item) => ({
+    ...item,
+    description: heuristicRecommendationDescription(item, body, kind),
+  }));
+  if (!geminiApiKey) return fallback;
+  try {
+    const outputLang = body.lang === 'en' ? 'English' : 'Japanese';
+    const prompt = `You are a concise travel editor. Write one short ${outputLang} sentence for each place below.
+Rules:
+- Mention why the place is notable in ${body.cityArea}.
+- Do not use vague template phrases.
+- For sightseeing, focus on landmark/value/experience.
+- For food, focus on local appeal, not generic chain language.
+- Return JSON only: [{"id":"...","description":"..."}]
+Location: ${body.cityArea}, ${body.state}, ${body.country}
+Type: ${kind}
+Places:
+${items.map((item) => `- ${item.id} | ${item.title} | ${item.address || ''}`).join('\n')}`;
+    const text = await callGemini(prompt, 512);
+    const parsed = parseJsonArray(text);
+    if (!parsed.length) return fallback;
+    const map = new Map(parsed.map((row: any) => [String(row.id), String(row.description || '').trim()]));
+    return items.map((item) => ({ ...item, description: map.get(item.id) || heuristicRecommendationDescription(item, body, kind) }));
+  } catch {
+    return fallback;
+  }
+}
+
+function heuristicRecommendationDescription(item: RecommendationItem, body: RequestBody, kind: 'sightseeing' | 'food') {
+  if (body.lang === 'en') {
+    return kind === 'food'
+      ? `${item.title} is a strong local dining option around ${body.cityArea}, easy to pair with walking and nearby stops.`
+      : `${item.title} is a notable stop around ${body.cityArea}, easy to include in a focused local route.`;
+  }
+  return kind === 'food'
+    ? `${item.title}は${body.cityArea}周辺で選びやすい飲食候補です。地域らしい食事動線に組み込みやすいです。`
+    : `${item.title}は${body.cityArea}周辺で知名度があり、散策導線に入れやすい観光候補です。`;
+}
+
 async function buildTrends(body: RequestBody): Promise<TrendItem[]> {
-  const location = [body.cityArea, body.state, body.country].filter(Boolean).join(' ');
-  const suggestions = await getGoogleSuggestQueries(location, body);
+  const suggestions = await getLocationSuggestQueries(body);
   const unique = dedupeStrings(suggestions)
     .filter((q) => includesLocation(q, body))
     .filter((q) => isUsefulTrendQuery(q, body))
     .slice(0, 10);
 
-  const enriched = await Promise.all(unique.map(async (keyword, index) => ({
+  if (!unique.length) {
+    throw new Error(body.lang === 'en' ? 'Trend data could not be retrieved for this area right now.' : 'この地域の Trend を取得できませんでした。');
+  }
+
+  const reasons = await enrichTrendReasons(unique, body);
+  return unique.map((keyword, index) => ({
     id: `trend:${index + 1}`,
     keyword,
-    reason: await explainTrendKeyword(keyword, body),
+    reason: reasons.get(keyword) || heuristicTrendReason(keyword, body),
     sourceUrl: `https://www.google.com/search?q=${encodeURIComponent(keyword)}`,
-  })));
-
-  return enriched;
+  }));
 }
 
-async function getGoogleSuggestQueries(location: string, body: RequestBody): Promise<string[]> {
-  const seeds = [
-    location,
-    `${location} ランチ`,
-    `${location} カフェ`,
-    `${location} 観光`,
-    `${location} ホテル`,
-    `${location} イベント`,
-    `${location} アクセス`,
-    `${location} 天気`,
-    `${body.cityArea} グルメ`,
-    `${body.cityArea} おすすめ`,
-  ];
+async function getLocationSuggestQueries(body: RequestBody): Promise<string[]> {
+  const location = [body.landmark, body.cityArea].filter(Boolean).join(' ').trim() || [body.cityArea, body.state].filter(Boolean).join(' ');
+  const seeds = body.lang === 'en'
+    ? [
+        location,
+        `${location} best restaurants`,
+        `${location} cafes`,
+        `${location} things to do`,
+        `${location} events`,
+        `${location} hotel`,
+        `${location} weather`,
+        `${location} access`,
+      ]
+    : [
+        location,
+        `${location} ランチ`,
+        `${location} カフェ`,
+        `${location} 観光`,
+        `${location} イベント`,
+        `${location} ホテル`,
+        `${location} 天気`,
+        `${location} 行き方`,
+        `${location} 駐車場`,
+      ];
   const results: string[] = [];
   for (const q of seeds) {
-    const url = `https://suggestqueries.google.com/complete/search?client=firefox&hl=ja&q=${encodeURIComponent(q)}`;
+    results.push(...(await fetchGoogleSuggest(q, body.lang || 'ja')));
+  }
+  return results;
+}
+
+async function fetchGoogleSuggest(query: string, lang: 'ja' | 'en') {
+  const endpoints = [
+    `https://suggestqueries.google.com/complete/search?client=chrome&hl=${lang}&q=${encodeURIComponent(query)}`,
+    `https://suggestqueries.google.com/complete/search?client=firefox&hl=${lang}&q=${encodeURIComponent(query)}`,
+  ];
+  for (const url of endpoints) {
     try {
       const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
       if (!res.ok) continue;
-      const payload = await res.json() as SuggestResponse;
-      const suggestions = Array.isArray(payload?.[1]) ? payload[1] : [];
-      results.push(...suggestions);
-    } catch {}
+      const payload = await res.json() as SuggestResponse | any;
+      const list = Array.isArray((payload as any)?.[1]) ? (payload as any)[1] : [];
+      if (list.length) return list.map((v: unknown) => String(v));
+    } catch {
+      // continue
+    }
   }
-  return results;
+  return [];
+}
+
+async function enrichTrendReasons(keywords: string[], body: RequestBody) {
+  const fallback = new Map(keywords.map((keyword) => [keyword, heuristicTrendReason(keyword, body)]));
+  if (!geminiApiKey) return fallback;
+  try {
+    const outputLang = body.lang === 'en' ? 'English' : 'Japanese';
+    const prompt = `You explain search intent. For each keyword below, write one short ${outputLang} sentence that explains why people are searching it now in ${body.cityArea}, ${body.state}. Mention specific context like seasonal demand, dining search, access checks, events, hotel comparison, weather, or sightseeing plans. Return JSON only: [{"keyword":"...","reason":"..."}]\nKeywords:\n${keywords.map((k) => `- ${k}`).join('\n')}`;
+    const text = await callGemini(prompt, 700);
+    const parsed = parseJsonArray(text);
+    if (!parsed.length) return fallback;
+    const map = new Map<string, string>();
+    for (const row of parsed) {
+      const keyword = String((row as any).keyword || '');
+      const reason = String((row as any).reason || '').trim();
+      if (keyword && reason) map.set(keyword, reason);
+    }
+    return new Map(keywords.map((keyword) => [keyword, map.get(keyword) || fallback.get(keyword)!]));
+  } catch {
+    return fallback;
+  }
+}
+
+async function callGemini(prompt: string, maxOutputTokens: number) {
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiApiKey}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.35, maxOutputTokens },
+    }),
+  });
+  if (!res.ok) throw new Error('Gemini failed');
+  const jsonRes = await res.json() as any;
+  return jsonRes?.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join(' ').trim() || '';
+}
+
+function parseJsonArray(text: string) {
+  if (!text) return [];
+  const cleaned = text.replace(/```json|```/g, '').trim();
+  const match = cleaned.match(/\[[\s\S]*\]/);
+  const candidate = match ? match[0] : cleaned;
+  try {
+    const parsed = JSON.parse(candidate);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function heuristicTrendReason(keyword: string, body: RequestBody) {
+  const area = body.cityArea;
+  const lang = body.lang || 'ja';
+  if (/ランチ|ディナー|グルメ|レストラン|居酒屋|cafe|restaurant|food|breakfast|brunch/i.test(keyword)) {
+    return lang === 'en'
+      ? `This query is rising because people around ${area} are comparing where to eat right before going out.`
+      : `${area}周辺で食事先を比較したい検索が増えている語です。来店直前の店選びや週末の外食検討が背景にあります。`;
+  }
+  if (/カフェ|喫茶|coffee|dessert/i.test(keyword)) {
+    return lang === 'en'
+      ? `People are likely searching this to find coffee, work-friendly cafés, or photogenic stops around ${area}.`
+      : `${area}周辺で休憩や作業、写真映えの店を探す流れで検索されやすい語です。`;
+  }
+  if (/ホテル|宿|旅館|hotel/i.test(keyword)) {
+    return lang === 'en'
+      ? `This tends to rise when people compare places to stay near ${area} and check pricing or location.`
+      : `${area}周辺で宿泊や滞在計画を立てる人が、立地や価格を比較する流れで検索しやすい語です。`;
+  }
+  if (/アクセス|行き方|駅|駐車場|access|station|parking|how to get/i.test(keyword)) {
+    return lang === 'en'
+      ? `This is usually searched right before a visit, when people need transport, station, or parking details for ${area}.`
+      : `${area}へ向かう直前に、交通・駅・駐車場などを確認する検索が重なりやすい語です。`;
+  }
+  if (/イベント|祭|フェス|展示|ライブ|event|festival|exhibition/i.test(keyword)) {
+    return lang === 'en'
+      ? `Interest rises when there is a limited-time event, exhibition, or seasonal program drawing people to ${area}.`
+      : `${area}で期間限定イベントや展示、催しが意識される時に検索が伸びやすい語です。`;
+  }
+  if (/天気|桜|紅葉|weather|cherry blossom|autumn/i.test(keyword)) {
+    return lang === 'en'
+      ? `People are likely checking timing, weather, and best conditions before going out around ${area}.`
+      : `${area}で外出条件や見頃のタイミングを確認したい時に検索が伸びやすい語です。`;
+  }
+  return lang === 'en'
+    ? `This appears to be a practical search around ${area}, likely tied to planning where to go, what to book, or what to compare right now.`
+    : `${area}周辺で、行き先や比較対象を具体的に決める直前検索として伸びている可能性がある語です。`;
 }
 
 function dedupeStrings(values: string[]) {
   const seen = new Set<string>();
   return values.filter((value) => {
-    const key = normalizeForKey(value);
+    const key = normalizeKey(value);
     if (!key || seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -246,52 +456,22 @@ function dedupeStrings(values: string[]) {
 }
 
 function includesLocation(query: string, body: RequestBody) {
-  const normalized = normalizeForKey(query);
-  return [body.cityArea, body.state].some((part) => normalized.includes(normalizeForKey(part)));
+  const normalized = normalizeKey(query);
+  const tokens = [body.cityArea, body.landmark || ''].filter(Boolean).map(normalizeKey);
+  return tokens.some((token) => token && normalized.includes(token));
 }
 
 function isUsefulTrendQuery(query: string, body: RequestBody) {
-  const normalized = normalizeForKey(query);
+  const normalized = normalizeKey(query);
   if (!normalized) return false;
   if (/local trend|ローカルトレンド|google trends|ぐーぐるとれんず/.test(normalized)) return false;
   if (/^[\W_]+$/.test(query)) return false;
-  if (normalized.length < normalizeForKey(body.cityArea).length + 2) return false;
+  if (normalized === normalizeKey(body.cityArea) || normalized === normalizeKey(`${body.cityArea} ${body.landmark || ''}`)) return false;
+  if (normalized.length < Math.max(4, normalizeKey(body.cityArea).length + 2)) return false;
   return true;
 }
 
-async function explainTrendKeyword(keyword: string, body: RequestBody) {
-  const heuristic = heuristicTrendReason(keyword, body);
-  if (!geminiApiKey) return heuristic;
-  try {
-    const prompt = `あなたは検索意図の編集者です。以下の検索ワードが、なぜ今その地域で検索されているかを日本語で1-2文、具体的に推測してください。テンプレを使わず、イベント・季節・飲食・アクセス・観光・比較検討などの背景を入れてください。
-地域: ${body.cityArea} / ${body.state} / ${body.country}
-検索ワード: ${keyword}`;
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiApiKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.4, maxOutputTokens: 120 } }),
-    });
-    if (!res.ok) return heuristic;
-    const jsonRes = await res.json() as any;
-    const text = jsonRes?.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join(' ').trim();
-    return text || heuristic;
-  } catch {
-    return heuristic;
-  }
-}
-
-function heuristicTrendReason(keyword: string, body: RequestBody) {
-  const area = body.cityArea;
-  if (/ランチ|ディナー|グルメ|レストラン|居酒屋/.test(keyword)) return `${area}で食事先を比較したい検索が増えている語です。来店直前の店選びや、週末の外食先検討で検索されやすいです。`;
-  if (/カフェ|喫茶/.test(keyword)) return `${area}で休憩や作業向けの店を探す流れで検索されやすい語です。写真映えや営業時間の確認も重なりやすいです。`;
-  if (/ホテル|宿|旅館/.test(keyword)) return `${area}周辺で宿泊や滞在計画を立てる人が増えると伸びやすい語です。料金比較や立地確認の需要が重なります。`;
-  if (/アクセス|行き方|駅|駐車場/.test(keyword)) return `${area}へ向かう直前の移動確認で検索されやすい語です。電車・徒歩・車の導線確認が背景にあります。`;
-  if (/イベント|祭|フェス|展示|ライブ/.test(keyword)) return `${area}で期間限定の催しやイベントが意識される時に検索されやすい語です。開催日や会場情報を確認したい動きが背景にあります。`;
-  if (/桜|紅葉|花火|天気/.test(keyword)) return `${area}で季節の見頃や外出条件を確認したい時に検索が伸びやすい語です。天候と回遊計画を合わせて調べる需要があります。`;
-  return `${area}周辺で今よく調べられている語です。観光や飲食、移動計画の直前検索が重なって上がっている可能性があります。`;
-}
-
-function normalizeForKey(value: string) {
+function normalizeKey(value: string) {
   return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
